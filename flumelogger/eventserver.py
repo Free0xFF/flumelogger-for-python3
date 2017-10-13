@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-
+import sys
 from copy import copy
 from random import shuffle
 
@@ -120,6 +120,13 @@ class FlumeEventServer(object):
         """ Connect to an active node.
         """
         try:
+            '''
+            when lost active nodes, we reconnect
+            if fail, throw exception
+            '''
+            if not self.active_nodes:
+                self.reconnect()
+            
             if not self.active_nodes:
                 raise StopIteration
 
@@ -155,6 +162,9 @@ class FlumeEventServer(object):
     def reconnect(self):
         """ Helper will attempt to reconnect on nodes.
         """
+        sys.stderr.write("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n")
+        sys.stderr.write("lost connection with flume, start to reconnect!\n")
+        sys.stderr.write("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n")
         for node in self.default_nodes:
             try:
                 if node not in self.active_nodes:
@@ -163,17 +173,43 @@ class FlumeEventServer(object):
                     self._add_node(node=node, client=client, transport=transport)
             except ConnectionFailure as e:
                 log_debug('failed to reconnect to {0}'.format(node), debug=self.debug)
-
+    
+    '''
+    by free0xff:
+    When flume be offline, exception throws and client lose efficacy.
+    We assume that client lost connection with flume, and then 
+    trying to reconnect and re-append......
+    ps: we retry once
+    '''
+    def reconnect_append(self, event, type="one"):
+        sys.stderr.write("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n")
+        sys.stderr.write("lost connection with flume,start to reconnect and re-append!\n")
+        sys.stderr.write("++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n")
+        self.reconnect()
+        try:
+            if len(self.default_nodes) == 0:
+                raise
+            node = self.default_nodes[0]
+            client = self.open_connections[node]['client']
+            if type=="many":
+                return client.appendBatch(event)
+            return client.append(event)
+        except Exception as e:
+            self._remove_node(node=self.current_node)
+            raise OperationFailure(e)
+        
     def append(self, event, client):
         try:
             return client.append(event)
         except Exception as e:
             self._remove_node(node=self.current_node)
-            raise OperationFailure(e)
+            return self.reconnect_append(event)
+            #raise OperationFailure(e)
 
     def append_batch(self, events, client):
         try:
             return client.appendBatch(events)
         except Exception as e:
             self._remove_node(node=self.current_node)
-            raise OperationFailure(e)
+            return self.reconnect_append(event=events, type="many")
+#             raise OperationFailure(e)
